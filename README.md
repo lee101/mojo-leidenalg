@@ -59,20 +59,25 @@ of three complete public calls. Compilation and initial loading are excluded.
 
 | case | mojo-leidenalg | leidenalg | result |
 | --- | ---: | ---: | --- |
-| Modularity `find_partition` (1,500-node SBM) | 45.1 ms | 34.2 ms | 0.76x, slower |
-| CPM `find_partition` (1,500-node SBM, gamma=0.01) | 40.1 ms | 30.8 ms | 0.77x, slower |
+| Modularity `find_partition` (1,500-node SBM) | 13.1 ms | 32.8 ms | 2.51x, faster |
+| CPM `find_partition` (1,500-node SBM, gamma=0.01) | 14.2 ms | 31.8 ms | 2.24x, faster |
 
 These figures are a point-in-time measurement, not a general performance
 claim. Upstream `leidenalg` is substantially more complete.
 
+There is no GPU path. The hot sparse kernels do roughly one arithmetic
+operation per weight while also loading indices and community state, well
+below the approximately two-FLOPs-per-byte threshold where transfer and launch
+costs could be recovered.
+
 ## How it works
 
-Python converts the undirected graph into a contiguous CSR layout and retains
-every NumPy buffer for the native call. The ctypes boundary validates lengths,
-strides, dtypes, index ranges, writeability, and non-null addresses. Mojo then
-uses caller-provided scratch buffers for degree/community totals and performs
-greedy local moves; Python contracts the graph between rounds and Mojo splits
-disconnected components.
+Python converts the undirected graph once into a contiguous CSR layout and
+retains every NumPy buffer for zero-copy native calls. The ctypes boundary
+validates lengths, strides, dtypes, index ranges, writeability, and non-null
+addresses. Mojo uses reusable caller-provided scratch buffers, SIMD reductions,
+and a thresholded parallel degree scan for large graphs; Python contracts the
+graph between rounds and Mojo splits disconnected components.
 
 ## License
 

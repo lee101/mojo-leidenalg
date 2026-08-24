@@ -96,6 +96,16 @@ def local_move(row, col, weight, membership, degree, total, size, marks, touched
     _array(order, np.dtype(np.int64), n, "order", writable=False)
     if np.any(order < 0) or np.any(order >= n) or len(np.unique(order)) != n:
         raise ValueError("order must be a permutation of the vertex indices")
+    return local_move_unchecked(
+        row, col, weight, membership, degree, total, size, marks, touched, kin,
+        order, mode, resolution, max_passes, max_comm_size,
+    )
+
+
+def local_move_unchecked(row, col, weight, membership, degree, total, size, marks,
+                         touched, kin, order, mode, resolution, max_passes,
+                         max_comm_size):
+    n = len(membership)
     return lib().mla_local_move(
         addr(row), addr(col), addr(weight), addr(membership), addr(degree), addr(total),
         addr(size), addr(marks), addr(touched), addr(kin), addr(order), n, int(mode),
@@ -114,8 +124,14 @@ def connected_refine(row, col, membership, result, seen, stack):
     _array(stack, np.dtype(np.int64), n, "stack")
     if row[0] != 0 or np.any(row[1:] < row[:-1]) or np.any(col < 0) or np.any(col >= n):
         raise ValueError("invalid CSR graph")
-    return lib().mla_connected_refine(addr(row), addr(col), addr(membership), addr(result),
-                                      addr(seen), addr(stack), n)
+    return connected_refine_unchecked(row, col, membership, result, seen, stack)
+
+
+def connected_refine_unchecked(row, col, membership, result, seen, stack):
+    return lib().mla_connected_refine(
+        addr(row), addr(col), addr(membership), addr(result), addr(seen), addr(stack),
+        len(membership),
+    )
 
 
 def quality(row, col, weight, membership, degree, total, size, mode, resolution):
@@ -123,5 +139,14 @@ def quality(row, col, weight, membership, degree, total, size, mode, resolution)
     _array(degree, np.dtype(np.float64), n, "degree")
     _array(total, np.dtype(np.float64), n, "total")
     _array(size, np.dtype(np.int64), n, "size")
-    return lib().mla_quality(addr(row), addr(col), addr(weight), addr(membership), addr(degree),
-                             addr(total), addr(size), n, int(mode), float(resolution))
+    return quality_unchecked(
+        row, col, weight, membership, degree, total, size, mode, resolution,
+    )
+
+
+def quality_unchecked(row, col, weight, membership, degree, total, size, mode,
+                      resolution):
+    return lib().mla_quality(
+        addr(row), addr(col), addr(weight), addr(membership), addr(degree),
+        addr(total), addr(size), len(membership), int(mode), float(resolution),
+    )

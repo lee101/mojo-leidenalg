@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import igraph as ig
 
-from ._lib import connected_refine, local_move
+from ._lib import connected_refine_unchecked, local_move_unchecked
 
 
 class Optimiser:
@@ -25,15 +25,18 @@ class Optimiser:
 
     def _move(self, partition):
         n = partition.n
-        degree = np.empty(n, dtype=np.float64)
-        total = np.empty(n, dtype=np.float64)
-        size = np.empty(n, dtype=np.int64)
-        marks = np.empty(n, dtype=np.int64)
-        touched = np.empty(n, dtype=np.int64)
-        kin = np.empty(n, dtype=np.float64)
-        order = np.random.default_rng(self._seed + self._calls).permutation(n).astype(np.int64)
+        degree, total, size = partition._scratch()
+        if not hasattr(partition, "_move_scratch"):
+            partition._move_scratch = (
+                np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64),
+                np.empty(n, dtype=np.float64), np.empty(n, dtype=np.int64),
+                np.arange(n, dtype=np.int64),
+            )
+        marks, touched, kin, order, base_order = partition._move_scratch
+        np.copyto(order, base_order)
+        np.random.default_rng(self._seed + self._calls).shuffle(order)
         self._calls += 1
-        return int(local_move(
+        return int(local_move_unchecked(
             partition._row, partition._col, partition._weight, partition._membership,
             degree, total, size, marks, touched, kin, order, partition._mode,
             partition.resolution_parameter, 32, int(self.max_comm_size),
@@ -54,12 +57,18 @@ class Optimiser:
         if is_membership_fixed is not None and any(is_membership_fixed):
             raise NotImplementedError("fixed memberships are not yet supported")
         n = partition.n
-        result = np.empty(n, dtype=np.int64)
-        seen = np.empty(n, dtype=np.int64)
-        stack = np.empty(n, dtype=np.int64)
-        connected_refine(partition._row, partition._col, partition._membership,
-                         result, seen, stack)
+        if not hasattr(partition, "_refine_scratch"):
+            partition._refine_scratch = (
+                np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64),
+                np.empty(n, dtype=np.int64),
+            )
+        result, seen, stack = partition._refine_scratch
+        old_membership = partition._membership
+        connected_refine_unchecked(
+            partition._row, partition._col, partition._membership, result, seen, stack,
+        )
         partition._membership = result
+        partition._refine_scratch = (old_membership, seen, stack)
         return partition
 
     @staticmethod

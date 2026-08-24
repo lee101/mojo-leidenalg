@@ -4,11 +4,18 @@ CSR stores each undirected edge twice.  Community ids are always in [0, n),
 which lets the caller provide O(n) scratch rather than allocating in Mojo.
 """
 
+from max.algorithm import parallelize
+from std.runtime import initialize_runtime
 from std.sys import simd_width_of
 
 
 comptime FPtr = UnsafePointer[Float64, AnyOrigin[mut=True]]
 comptime IPtr = UnsafePointer[Int, AnyOrigin[mut=True]]
+comptime W = simd_width_of[DType.float64]()
+comptime DEGREE_PARALLEL_EDGES = 1_000_000
+comptime DEGREE_PARALLEL_NODES = 32_768
+comptime DEGREE_CHUNK = 1_024
+comptime DEGREE_WORKERS = 16
 
 
 def fp(address: Int) -> FPtr:
@@ -19,15 +26,8 @@ def ip(address: Int) -> IPtr:
     return IPtr(unsafe_from_address=address)
 
 
-def initialise(
-    row: IPtr, col: IPtr, weight: FPtr, membership: IPtr, degree: FPtr,
-    total: FPtr, size: IPtr, n: Int
-):
-    comptime W = simd_width_of[DType.float64]()
-    for c in range(n):
-        total[c] = 0.0
-        size[c] = 0
-    for i in range(n):
+def degree_range(row: IPtr, weight: FPtr, degree: FPtr, start: Int, stop: Int):
+    for i in range(start, stop):
         var d = 0.0
         var e = row[i]
         var end = row[i + 1]
@@ -41,6 +41,32 @@ def initialise(
             d += weight[e]
             e += 1
         degree[i] = d
+
+
+def initialise(
+    row: IPtr, col: IPtr, weight: FPtr, membership: IPtr, degree: FPtr,
+    total: FPtr, size: IPtr, n: Int
+):
+    var c = 0
+    while c + W <= n:
+        total.store(c, SIMD[DType.float64, W](0.0))
+        size.store(c, SIMD[DType.int, W](0))
+        c += W
+    while c < n:
+        total[c] = 0.0
+        size[c] = 0
+        c += 1
+    if n >= DEGREE_PARALLEL_NODES and row[n] >= DEGREE_PARALLEL_EDGES:
+        initialize_runtime()
+        var chunks = (n + DEGREE_CHUNK - 1) // DEGREE_CHUNK
+        def work(chunk: Int) capturing:
+            var start = chunk * DEGREE_CHUNK
+            degree_range(row, weight, degree, start, min(start + DEGREE_CHUNK, n))
+        parallelize[work](chunks, min(chunks, DEGREE_WORKERS))
+    else:
+        degree_range(row, weight, degree, 0, n)
+    for i in range(n):
+        var d = degree[i]
         var c = membership[i]
         total[c] += d
         size[c] += 1
@@ -57,8 +83,13 @@ def local_move(
         marks[c] = 0
     var moved_total = 0
     var m2 = 0.0
-    for i in range(n):
+    var i = 0
+    while i + W <= n:
+        m2 += degree.load[width=W](i).reduce_add()
+        i += W
+    while i < n:
         m2 += degree[i]
+        i += 1
     if m2 == 0.0:
         return 0
     for pass_id in range(max_passes):
@@ -151,8 +182,14 @@ def quality(
     initialise(row, col, weight, membership, degree, total, size, n)
     var m2 = 0.0
     var internal = 0.0
-    for i in range(n):
+    var i = 0
+    while i + W <= n:
+        m2 += degree.load[width=W](i).reduce_add()
+        i += W
+    while i < n:
         m2 += degree[i]
+        i += 1
+    for i in range(n):
         for e in range(row[i], row[i + 1]):
             if membership[i] == membership[col[e]]:
                 internal += weight[e]
@@ -164,8 +201,14 @@ def quality(
     if m2 == 0.0:
         return 0.0
     var expected = 0.0
-    for c in range(n):
+    var c = 0
+    while c + W <= n:
+        var values = total.load[width=W](c)
+        expected += (values * values).reduce_add() / m2
+        c += W
+    while c < n:
         expected += total[c] * total[c] / m2
+        c += 1
     if mode == 0:
         return (internal - resolution * expected) / m2
     return internal - resolution * expected

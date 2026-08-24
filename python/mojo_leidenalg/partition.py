@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import Counter
+from itertools import chain
 
 import numpy as np
 
-from ._lib import quality
+from ._lib import quality_unchecked
 
 
 def _compact(values, n: int) -> np.ndarray:
@@ -33,17 +34,18 @@ def _float64_weights(weights):
     return result
 
 
-def _csr(graph, weights):
+def _edge_array(graph) -> np.ndarray:
+    edge_list = graph.get_edgelist()
+    if not edge_list:
+        return np.empty((0, 2), dtype=np.int64)
+    return np.fromiter(chain.from_iterable(edge_list), dtype=np.int64,
+                       count=2 * len(edge_list)).reshape((-1, 2))
+
+
+def _csr(graph, edges, edge_weight):
     if graph.is_directed():
         raise NotImplementedError("mojo_leidenalg currently supports undirected igraph graphs")
     n = graph.vcount()
-    edges = np.asarray(graph.get_edgelist(), dtype=np.int64)
-    if weights is None:
-        edge_weight = np.ones(len(edges), dtype=np.float64)
-    elif isinstance(weights, str):
-        edge_weight = _float64_weights(graph.es[weights])
-    else:
-        edge_weight = _float64_weights(weights)
     if len(edge_weight) != len(edges):
         raise ValueError("weights must have one entry per edge")
     if not len(edges):
@@ -74,12 +76,19 @@ class VertexPartition:
         self.resolution_parameter = float(resolution_parameter)
         if not np.isfinite(self.resolution_parameter):
             raise ValueError("resolution_parameter must be finite")
-        self._edges = np.asarray(graph.get_edgelist(), dtype=np.int64)
-        self._row, self._col, self._weight = _csr(graph, weights)
+        if graph.is_directed():
+            raise NotImplementedError("mojo_leidenalg currently supports undirected igraph graphs")
+        self._edges = _edge_array(graph)
         self._edge_weight = (np.ones(len(self._edges), dtype=np.float64) if weights is None
                              else (_float64_weights(graph.es[weights]) if isinstance(weights, str)
                                    else _float64_weights(weights)))
+        self._row, self._col, self._weight = _csr(
+            graph, self._edges, self._edge_weight,
+        )
         self._membership = _compact(initial_membership, self.n)
+        self._degree = np.empty(self.n, dtype=np.float64)
+        self._total = np.empty(self.n, dtype=np.float64)
+        self._size = np.empty(self.n, dtype=np.int64)
 
     @property
     def membership(self):
@@ -108,16 +117,17 @@ class VertexPartition:
         return len(self[community])
 
     def _scratch(self):
-        return (np.empty(self.n, dtype=np.float64), np.empty(self.n, dtype=np.float64),
-                np.empty(self.n, dtype=np.int64))
+        return self._degree, self._total, self._size
 
     def quality(self, resolution_parameter=None):
         resolution = self.resolution_parameter if resolution_parameter is None else float(resolution_parameter)
         if not np.isfinite(resolution):
             raise ValueError("resolution_parameter must be finite")
         degree, total, size = self._scratch()
-        return float(quality(self._row, self._col, self._weight, self._membership,
-                             degree, total, size, self._mode, resolution))
+        return float(quality_unchecked(
+            self._row, self._col, self._weight, self._membership,
+            degree, total, size, self._mode, resolution,
+        ))
 
     @property
     def q(self):

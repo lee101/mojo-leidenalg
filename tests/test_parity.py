@@ -52,12 +52,31 @@ def test_move_delta_matches_upstream(weighted_graph):
 
 
 def test_quality_simd_weight_scan_with_tail_matches_upstream():
-    graph = ig.Graph.Star(6, mode="undirected")
-    weights = [0.5, 1.5, 2.5, 3.5, 4.5]
-    membership = [0, 0, 0, 1, 1, 1]
+    graph = ig.Graph.Star(18, mode="undirected")
+    weights = [0.5 + i for i in range(17)]
+    membership = [0] * 9 + [1] * 9
     ours = mla.ModularityVertexPartition(graph, membership, weights)
     theirs = upstream.ModularityVertexPartition(graph, membership, weights)
     assert ours.quality() == pytest.approx(theirs.quality(), abs=1e-12)
+
+
+def test_parallel_degree_threshold_matches_scalar_result():
+    from mojo_leidenalg._lib import quality
+
+    n = 32_768
+    entries_per_node = 31
+    row = np.arange(n + 1, dtype=np.int64) * entries_per_node
+    col = np.zeros(n * entries_per_node, dtype=np.int64)
+    weight = np.ones(len(col), dtype=np.float64)
+    membership = np.zeros(n, dtype=np.int64)
+    degree = np.empty(n, dtype=np.float64)
+    total = np.empty(n, dtype=np.float64)
+    size = np.empty(n, dtype=np.int64)
+
+    result = quality(row, col, weight, membership, degree, total, size, 0, 1.0)
+
+    assert result == pytest.approx(0.0, abs=1e-12)
+    assert np.all(degree == entries_per_node)
 
 
 def test_find_partition_improves_and_returns_connected_communities():
