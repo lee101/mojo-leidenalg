@@ -4,18 +4,13 @@ CSR stores each undirected edge twice.  Community ids are always in [0, n),
 which lets the caller provide O(n) scratch rather than allocating in Mojo.
 """
 
-from max.algorithm import parallelize
-from std.runtime import initialize_runtime
 from std.sys import simd_width_of
 
 
 comptime FPtr = UnsafePointer[Float64, AnyOrigin[mut=True]]
 comptime IPtr = UnsafePointer[Int, AnyOrigin[mut=True]]
 comptime W = simd_width_of[DType.float64]()
-comptime DEGREE_PARALLEL_EDGES = 1_000_000
-comptime DEGREE_PARALLEL_NODES = 32_768
 comptime DEGREE_CHUNK = 1_024
-comptime DEGREE_WORKERS = 16
 
 
 def fp(address: Int) -> FPtr:
@@ -56,15 +51,12 @@ def initialise(
         total[c] = 0.0
         size[c] = 0
         c += 1
-    if n >= DEGREE_PARALLEL_NODES and row[n] >= DEGREE_PARALLEL_EDGES:
-        initialize_runtime()
-        var chunks = (n + DEGREE_CHUNK - 1) // DEGREE_CHUNK
-        def work(chunk: Int) capturing:
-            var start = chunk * DEGREE_CHUNK
-            degree_range(row, weight, degree, start, min(start + DEGREE_CHUNK, n))
-        parallelize[work](chunks, min(chunks, DEGREE_WORKERS))
-    else:
-        degree_range(row, weight, degree, 0, n)
+    # Summing CSR row weights is a pure gather-and-add pass; chunking it across
+    # threads would only add synchronisation to a bandwidth-bound walk.
+    var chunks = (n + DEGREE_CHUNK - 1) // DEGREE_CHUNK
+    for chunk in range(chunks):
+        var start = chunk * DEGREE_CHUNK
+        degree_range(row, weight, degree, start, min(start + DEGREE_CHUNK, n))
     for i in range(n):
         var d = degree[i]
         var c = membership[i]
